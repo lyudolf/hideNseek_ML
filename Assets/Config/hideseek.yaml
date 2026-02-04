@@ -52,6 +52,10 @@ behaviors:
       extrinsic:
         gamma: 0.99
         strength: 1.0
+      curiosity:
+        strength: 0.02
+        gamma: 0.99
+        encoding_size: 256
     max_steps: 50000000
     time_horizon: 128
     summary_freq: 10000

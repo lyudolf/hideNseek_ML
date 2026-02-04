@@ -49,8 +49,9 @@ public class Obstacle : MonoBehaviour
         if (rb != null)
         {
             rb.constraints = RigidbodyConstraints.FreezeRotation;
-            rb.mass = 100f; // Very heavy - almost immovable
+            rb.mass = 70f; // Heavy but moveable
             rb.drag = 8f; // High friction - stops quickly
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic; // Prevent tunneling through walls
         }
     }
     
@@ -113,7 +114,98 @@ public class Obstacle : MonoBehaviour
         // Ignore collision between agent and this obstacle while grabbed
         SetCollisionIgnore(true);
         
-        // Don't reposition - just grab where it is
+        // Auto-unlock if locked by same team (allows moving it)
+        if (isLocked)
+        {
+            isLocked = false;
+            lockedByTeam = null;
+            if (rb != null) rb.isKinematic = false;
+            UpdateVisuals();
+        }
+        
+        // SNAP LOGIC: Align closest face to agent
+        if (rb != null)
+        {
+            // 1. Determine which local axis of the box is facing the agent
+            Vector3 directToAgent = transform.InverseTransformDirection(agent.transform.position - transform.position);
+            
+            Vector3 closestAxis = Vector3.forward;
+            float maxDot = -Mathf.Infinity;
+            
+            // Check 4 cardinal directions (we assume box is upright on Y)
+            Vector3[] axes = new Vector3[] { Vector3.forward, Vector3.back, Vector3.right, Vector3.left };
+            
+            foreach (var axis in axes)
+            {
+                float dot = Vector3.Dot(directToAgent, axis);
+                if (dot > maxDot)
+                {
+                    maxDot = dot;
+                    closestAxis = axis;
+                }
+            }
+            
+            // 2. Rotate box so that 'closestAxis' points AT the agent (Agent.back)
+            // We want the face LOOKING AT the agent to be attached to the agent's FRONT.
+            // So Box.Rotation * closestAxis should align with Agent.Back (-Agent.Forward)
+            
+            // Current world direction of the axis
+            // We want to rotate such that: NewRotation * axis = -Agent.Forward
+            
+            Quaternion targetRotation = Quaternion.LookRotation(-agent.transform.forward, Vector3.up);
+            
+            // Adjust based on which local axis we are holding
+            if (closestAxis == Vector3.forward) targetRotation *= Quaternion.Euler(0, 0, 0); // No adjustment needed if Back is facing Agent? Wait.
+            // LookRotation forward is Z+. If we want Z+ to point at Agent (which is -AgentForward relative to World), we use LookRotation(-AgentForward).
+            
+            // But wait, if closestAxis is Right (X+), we want X+ to point at Agent.
+            // So we need to rotate -90 around Y relative to targetRotation.
+            if (closestAxis == Vector3.left) targetRotation *= Quaternion.Euler(0, 90, 0); 
+            else if (closestAxis == Vector3.right) targetRotation *= Quaternion.Euler(0, -90, 0);
+            else if (closestAxis == Vector3.back) targetRotation *= Quaternion.Euler(0, 180, 0);
+            
+            transform.rotation = targetRotation;
+            
+            // 3. Position Snap
+            float snapDist = grabDistance;
+            
+            // RAYCAST CLAMP: Check for walls between agent and target position
+            // Cast from chest height (up 0.5f) to avoid floor hits
+            Vector3 rayOrigin = agent.transform.position + Vector3.up * 0.5f;
+            Vector3 rayDirection = agent.transform.forward;
+            RaycastHit hit;
+            
+            // Check for walls up to grabDistance
+            // We use a mask for Default and Wall layers
+            int layerMask = LayerMask.GetMask("Default", "Wall", "Obstacle"); // Also check against other obstacles
+            
+            if (Physics.Raycast(rayOrigin, rayDirection, out hit, grabDistance, layerMask))
+            {
+                // If we hit something (that isn't the object we are grabbing, ideally)
+                // Since we are grabbing 'this', we should disable its collider during this check or ignore it?
+                // But we haven't moved 'this' yet, so 'this' is at old pos.
+                // If 'this' is in front of us, the ray might hit it.
+                // We want to find WALLS BEHIND the box or close to agent.
+                
+                // Acutally, if we hit a wall at 1.0m, we should snap to 0.9m.
+                if (hit.collider.gameObject != gameObject && !hit.collider.transform.IsChildOf(transform))
+                {
+                     snapDist = Mathf.Max(hit.distance - 0.2f, 0.5f); // Keep at least 0.5m away from agent
+                }
+            }
+
+            Vector3 targetPos = agent.transform.position + agent.transform.forward * snapDist;
+            targetPos = new Vector3(targetPos.x, initialPosition.y, targetPos.z); // Keep original Y (floor)
+            
+            // Reverted overly strict wall check
+            
+            transform.rotation = targetRotation;
+            transform.position = targetPos; // Keep original Y (floor)
+            
+            // Reset velocities for clean snap
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
         
         // Create FixedJoint to connect obstacle to agent
         grabJoint = gameObject.AddComponent<FixedJoint>();
@@ -128,7 +220,7 @@ public class Obstacle : MonoBehaviour
         // Reduce physics when grabbed for smooth pulling
         if (rb != null)
         {
-            rb.mass = 1f; // Light when grabbed - easy to pull
+            rb.mass = 5f; // Light when grabbed - easy to pull
             rb.drag = 2f;
             rb.angularDrag = 10f;
             // Freeze rotation AND Y position to prevent floating
@@ -162,7 +254,7 @@ public class Obstacle : MonoBehaviour
         // Restore to heavy physics when released
         if (rb != null && !rb.isKinematic)
         {
-            rb.mass = 100f; // Back to very heavy
+            rb.mass = 70f; // Back to heavy
             rb.drag = 8f;
             rb.angularDrag = 0.5f;
             rb.constraints = RigidbodyConstraints.FreezeRotation; // Keep upright

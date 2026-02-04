@@ -174,10 +174,10 @@ public class HideSeekAgent : Agent
         rb.velocity = targetVelocity;
         
         // Face movement direction (only when actively moving)
-        if (move.sqrMagnitude > 0.5f)
+        if (move.sqrMagnitude > 0.01f)
         {
             Quaternion targetRotation = Quaternion.LookRotation(move);
-            transform.rotation = targetRotation; // Instant rotation
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, rotateSpeed * Time.fixedDeltaTime);
         }
         
         // Discrete actions: 0=Nothing, 1=Grab/Release, 2=Lock
@@ -357,15 +357,35 @@ public class HideSeekAgent : Agent
     /// <summary>
     /// Try to lock the grabbed obstacle.
     /// </summary>
+    // Cooldown to prevent rapid toggling (Lock -> Unlock in same decision window)
+    private float lastLockActionTime = -999f;
+    
     public void TryLock()
     {
-        Obstacle target = grabbedObstacle;
-        if (target != null && target.TryLock(this))
+        if (Time.time < lastLockActionTime + 0.5f) return;
+        
+        if (grabbedObstacle != null)
         {
-            // Mark that we locked something - reward comes from surviving after lock
-            hasLockedObstacle = true;
-            lockTime = Time.time;
-            grabbedObstacle = null;
+            // Lock the object we are holding
+            if (grabbedObstacle.TryLock(this))
+            {
+                hasLockedObstacle = true;
+                lockTime = Time.time;
+                lastLockActionTime = Time.time;
+                grabbedObstacle = null;
+            }
+        }
+        else
+        {
+            // Try to unlock a nearby object
+            Obstacle nearest = FindNearestObstacle();
+            if (nearest != null && nearest.isLocked && nearest.lockedByTeam == team)
+            {
+                if (nearest.TryUnlock(this))
+                {
+                    lastLockActionTime = Time.time;
+                }
+            }
         }
     }
     
